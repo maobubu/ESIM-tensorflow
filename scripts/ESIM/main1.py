@@ -229,10 +229,20 @@ def bilstm_filter(state_below,n_samples,mask,options,keep_prob,prefix='lstm',dim
 
 
 def bilstm_layer(state_below,n_samples,mask,options,dim,keep_prob,is_training=True):
-    cell = tf.contrib.cudnn_rnn.CudnnLSTM(num_layers = 1,num_units = dim,input_mode="linear_input",direction = "bidirectional",dropout = 0)
+    #cell = tf.contrib.cudnn_rnn.CudnnLSTM(num_layers = 1,num_units = dim,input_mode="linear_input",direction = "bidirectional",dropout = 0)
+    cell = tf.contrib.cudnn_rnn.CudnnLSTM(num_layers=1, num_units=dim, input_size=dim,input_mode="linear_input", direction="bidirectional", dropout=0)
+    params_size_t = cell.params_size()
+    est_size = estimate_cudnn_parameter_size(
+        num_layers=1,
+        hidden_size=dim,
+        input_size=dim,
+        input_mode="linear_input",
+        direction="bidirectional")
+    c = tf.zeros([2, n_samples, dim],tf.float32)
+    h = tf.zeros([2, n_samples, dim],tf.float32)
 
-    outputs,_= cell(inputs=state_below)
-
+    rnn_params = tf.get_variable("lstm_params",initializer=tf.random_uniform([est_size], -0.1, 0.1))
+    outputs, h, c = cell(state_below, h, c, rnn_params, is_training)
     return outputs
 
 def init_params(options, worddicts):

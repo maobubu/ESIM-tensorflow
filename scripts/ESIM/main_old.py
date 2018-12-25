@@ -3,30 +3,19 @@ Created on December 25th, 2018
 @author : maobubu (Huicheng Liu)
 Reference : Enhanced LSTM for Natural Language Inference (ACL 2017)
 '''
-import os
-# os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
-# os.environ['TF_CPP_MIN_VLOG_LEVEL'] = '3'
-# os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-import pickle as pkl
+import tensorflow as tf
+import cPickle as pkl
 import pdb
 import numpy
 import copy
-import logging
-from tensorflow import logging  as log
-# logger = logging.getLogger("tensorflow").setLevel(logging.WARNING)
-# logging.getLogger(tensorflow).disabled = True
-# log.set_verbosity(logging.INFO)
 
+import os
 import warnings
 import sys
 import time
 import pprint
-
-import tensorflow as tf
+import logging
 from collections import OrderedDict
-# from nli_prepa import TextIterator
 from data_iterator import TextIterator
 from tensorflow.contrib import rnn
 
@@ -61,6 +50,15 @@ The life-cycle of each of these layers is as follows
 Each prefix is used like a key and should be unique
 to avoid naming conflicts when building the graph.
 """
+# layers: 'name': ('parameter initializer', 'feedforward')
+# layers = {'ff': ('param_init_fflayer', 'fflayer'),
+#           }
+#
+#
+# def get_layer(name):
+#     fns = layers[name]
+#     return (eval(fns[0]), eval(fns[1]))
+
 
 # some utilities
 def ortho_weight(ndim):
@@ -134,13 +132,13 @@ def prepare_data(seqs_x, seqs_y, labels, options, maxlen=None):
 
 
 
-def fflayer(options, input,params,prefix='ff',  activation_function=None,nin=None, nout=None):
+def fflayer_3D(options, input,prefix='ff',  activation_function=None,nin=None, nout=None):
 
     with tf.variable_scope(prefix,reuse = tf.AUTO_REUSE):
         W = tf.get_variable(
                         _s(prefix,'W'),
                         shape = [nin,nout],
-                        initializer=tf.random_normal_initializer(stddev=0.02),
+                        initializer =  tf.random_uniform_initializer( -0.1, 0.1),
                         dtype=tf.float32
                         )
         bias = tf.get_variable(
@@ -153,7 +151,7 @@ def fflayer(options, input,params,prefix='ff',  activation_function=None,nin=Non
 
     # W_ = tf.tile(W,[tf.shape(input)[0],1])
     # W = tf.reshape(W_,[tf.shape(input)[0],tf.shape(W)[0],tf.shape(W)[1]])
-    result = tf.nn.bias_add(tf.tensordot(input,W,[[-1],[0]]),bias)
+    result = tf.nn.bias_add(tf.tensordot(input,W,[[2],[0]]),bias)
     if activation_function is None:
         outputs = result
     else:
@@ -185,54 +183,81 @@ def fflayer_2D(options, input,prefix='ff',  activation_function=None,nin=None, n
         outputs = activation_function(result)
     return outputs
 
-def cudnn_lstm_parameter_size(input_size, hidden_size):
-    """Number of parameters in a single CuDNN LSTM cell."""
-    biases = 8 * hidden_size
-    weights = 4 * (hidden_size * input_size) + 4 * (hidden_size * hidden_size)
-    return biases + weights
+# def cudnn_lstm_parameter_size(input_size, hidden_size):
+#     """Number of parameters in a single CuDNN LSTM cell."""
+#     biases = 8 * hidden_size
+#     weights = 4 * (hidden_size * input_size) + 4 * (hidden_size * hidden_size)
+#     return biases + weights
+#
+# def direction_to_num_directions(direction):
+#     if direction == "unidirectional":
+#         return 1
+#     elif direction == "bidirectional":
+#         return 2
+#     else:
+#         raise ValueError("Unknown direction: %r." % (direction,))
+# def estimate_cudnn_parameter_size(num_layers,
+#                                   input_size,
+#                                   hidden_size,
+#                                   input_mode,
+#                                   direction):
+#     """
+#     Compute the number of parameters needed to
+#     construct a stack of LSTMs. Assumes the hidden states
+#     of bidirectional LSTMs are concatenated before being
+#     sent to the next layer up.
+#     """
+#     num_directions = direction_to_num_directions(direction)
+#     params = 0
+#     isize = input_size
+#     for layer in range(num_layers):
+#         for direction in range(num_directions):
+#             params += cudnn_lstm_parameter_size(
+#                 isize, hidden_size
+#             )
+#         isize = hidden_size * num_directions
+#     return params
 
-def direction_to_num_directions(direction):
-    if direction == "unidirectional":
-        return 1
-    elif direction == "bidirectional":
-        return 2
-    else:
-        raise ValueError("Unknown direction: %r." % (direction,))
-def estimate_cudnn_parameter_size(num_layers,
-                                  input_size,
-                                  hidden_size,
-                                  input_mode,
-                                  direction):
-    """
-    Compute the number of parameters needed to
-    construct a stack of LSTMs. Assumes the hidden states
-    of bidirectional LSTMs are concatenated before being
-    sent to the next layer up.
-    """
-    num_directions = direction_to_num_directions(direction)
-    params = 0
-    isize = input_size
-    for layer in range(num_layers):
-        for direction in range(num_directions):
-            params += cudnn_lstm_parameter_size(
-                isize, hidden_size
-            )
-        isize = hidden_size * num_directions
-    return params
 
 
-
-def bilstm_filter(state_below,n_samples,mask,options,keep_prob,prefix='lstm',dim=300,is_training=True):
+def bilstm_filter(state_below,n_samples,options,keep_prob,prefix='lstm',dim=300,is_training=True):
         with tf.variable_scope(name_or_scope=prefix,reuse=tf.AUTO_REUSE) as scope:
-            output1 = bilstm_layer(state_below,n_samples,mask,options,dim,keep_prob,is_training=is_training)
+            output1 = bilstm_layer(state_below,n_samples,options,dim,keep_prob,is_training=is_training)
         return output1
 
 
-def bilstm_layer(state_below,n_samples,mask,options,dim,keep_prob,is_training=True):
-    cell = tf.contrib.cudnn_rnn.CudnnLSTM(num_layers = 1,num_units = dim,input_mode="linear_input",direction = "bidirectional",dropout = 0)
+def bilstm_layer(state_below,n_samples,options,dim,keep_prob,is_training=True):
+    # cell = tf.contrib.cudnn_rnn.CudnnLSTM(num_layers = 1,num_units = dim,input_size = dim,input_mode="linear_input",direction = "bidirectional",dropout = 0)
+    # # params_size_t = cell.params_size()
+    # est_size = estimate_cudnn_parameter_size(
+    #     num_layers=1,
+    #     hidden_size=dim,
+    #     input_size=dim,
+    #     input_mode="linear_input",
+    #     direction="bidirectional")
+    # # params_size_t = ((dim * dim * 4) + (dim * dim * 4) + (dim * 2 * 4)) * 2
+    # print tf.shape(est_size)
+    # c = tf.zeros([2, n_samples, dim],tf.float32)
+    # h = tf.zeros([2, n_samples, dim],tf.float32)
+    # # rnn_params = tf.get_variable("lstm_params",initializer=tf.orthogonal_initializer([params_size_t]))
+    # # initial= tf.orthogonal_initializer()
+    #
+    # rnn_params = tf.get_variable("lstm_params",initializer=tf.random_uniform([est_size], -0.1, 0.1))
+    # outputs,_,_ = cell(state_below,h,c,rnn_params,is_training=is_training)
+    # x = tf.reshape(state_below,[-1,options['dim_word']])
+    # x = tf.split(x, tf.shape(n_steps)[0])
+    # x = tf.unstack(state_below,n_steps , 0)
+    # x = tf.reshape(state_below,[options['batch_size'],options['dim']])
+    # forward direction
+    # sent1 batchsize dim
+    lstm_fw_cell = rnn.LSTMCell(dim,forget_bias=0.0,initializer=tf.orthogonal_initializer())
 
-    outputs,_= cell(inputs=state_below)
+    # back direction
+    lstm_bw_cell = rnn.LSTMCell(dim,forget_bias=0.0,initializer=tf.orthogonal_initializer())
+    # cell_dp_fw = tf.contrib.rnn.DropoutWrapper(lstm_fw_cell, input_keep_prob=keep_prob, dtype=tf.float32)
+    # cell_dp_bw = tf.contrib.rnn.DropoutWrapper(lstm_bw_cell, input_keep_prob=keep_prob, dtype=tf.float32)
 
+    outputs, states = tf.nn.bidirectional_dynamic_rnn(lstm_fw_cell , lstm_bw_cell  ,state_below,dtype=tf.float32,time_major=True)
     return outputs
 
 def init_params(options, worddicts):
@@ -276,10 +301,12 @@ def dot_production_attention(x_sent,y_sent,x_mask,y_mask):
     weight_matrix_x = tf.reduce_sum(tf.expand_dims(x_sent,1)*tf.expand_dims(beta,-1),2)
     return tf.transpose( weight_matrix_y,[1,0,2]),tf.transpose( weight_matrix_x,[1,0,2])
 
-def build_model(embedding, options,params):
+def build_model(embedding, options):
     """ Builds the entire computational graph used for training
     """
     opt_ret = dict()
+    # n_timesteps_x1 = tf.placeholder(tf.float32,name='n_timesteps_x1')
+    # n_timesteps_x2 = tf.placeholder(tf.float32,name='n_timesteps_x2')
 
     # description string: #words x #samples
     x1 = tf.placeholder(tf.int64,shape=[None,None],name='x1')
@@ -287,7 +314,7 @@ def build_model(embedding, options,params):
     x2 = tf.placeholder(tf.int64,shape=[None,None],name='x2')
     x2_mask = tf.placeholder(tf.float32,shape=[None,None],name='x2_mask')
     y = tf.placeholder(tf.int64,shape=[None],name='y')
-    keep_rate = tf.placeholder(tf.float32, [],name='keep_rate')
+
 
 
     # description string: #words x #samples
@@ -295,91 +322,93 @@ def build_model(embedding, options,params):
     n_timesteps_x1 = tf.shape(x1)[0]
     n_timesteps_x2 = tf.shape(x2)[0]
     n_samples = tf.shape(x1)[1]
+    # x1_kb = tf.placeholder(tf.float32,shape=(n_timesteps_x1,options['batch_size'],n_timesteps_x2,options['dim_kb']),name='x1_kb')
+    # x2_kb = tf.placeholder(tf.float32,shape=(n_timesteps_x2,options['batch_size'],n_timesteps_x1,options['dim_kb']),name='x2_kb')
 
-
+    keep_prob = 1
     is_training = True
-    #sent1,batchsize,emb
-    emb1 = tf.nn.embedding_lookup(embedding,x1)
+    # x1_kb = tf.reshape(slim.flatten(x1_kb),[n_timesteps_x1,n_samples,n_timesteps_x2,options['dim_kb']])
+    # x2_kb = tf.reshape(slim.flatten(x2_kb),[n_timesteps_x2,n_samples,n_timesteps_x1,options['dim_kb']])
+    # # word embedding
+    emb1_ = tf.nn.embedding_lookup(embedding,tf.reshape(x1,[-1]))
+    emb1 = tf.reshape(emb1_, shape=[n_timesteps_x1,n_samples, options['dim_word']])
     if options['use_dropout']:
-        emb1 =  tf.nn.dropout(emb1, keep_rate)
-    emb2 = tf.nn.embedding_lookup(embedding,x2)
+        emb1 =  tf.nn.dropout(emb1, keep_prob)
+    emb2_ = tf.nn.embedding_lookup(embedding, tf.reshape(x2, [-1]))
+    emb2 = tf.reshape(emb2_, shape=[n_timesteps_x2, n_samples, options['dim_word']])
     if options['use_dropout']:
-         emb2 = tf.nn.dropout(emb2, keep_rate)
-    proj1 = bilstm_filter( emb1,n_samples,x1_mask, options,keep_rate, prefix='encoder',dim=300,is_training=is_training)
-    ctx1 = tf.concat(proj1,2)
-    proj2 = bilstm_filter( emb2,n_samples,x2_mask ,options,keep_rate, prefix='encoder',dim=300,is_training=is_training)
-    ctx2 = tf.concat(proj2,2)
+         emb2 = tf.nn.dropout(emb2, keep_prob)
+    ctx1 = bilstm_filter( emb1,n_samples, options,keep_prob, prefix='encoder',dim=300,is_training=is_training)
+    ctx1 = tf.concat(ctx1,2)
+    ctx2 = bilstm_filter( emb2,n_samples, options,keep_prob, prefix='encoder',dim=300,is_training=is_training)
+    ctx2 = tf.concat(ctx2,2)
+
     ctx1 = ctx1 * x1_mask[:,:,None]
     ctx2 = ctx2 * x2_mask[:,:,None]
-    weight_y,weight_x = dot_production_attention(tf.transpose(ctx1,[1,0,2]),tf.transpose(ctx2,[1,0,2]),tf.transpose(x1_mask,[1,0]),tf.transpose(x2_mask,[1,0]))
+
     inp1_ = tf.concat([ctx1, weight_y, tf.multiply(ctx1,weight_y), tf.subtract(ctx1,weight_y)],2)
     inp2_ = tf.concat([ctx2, weight_x, tf.multiply(ctx2,weight_x), tf.subtract(ctx2,weight_x)],2)
 
-    inp1 = fflayer(options,inp1_,params,prefix='projection',activation_function=tf.nn.relu, nin=2400, nout=300)
-    inp2 = fflayer(options,inp2_,params,prefix='projection',activation_function=tf.nn.relu, nin=2400, nout=300)
+    inp1 = fflayer_3D(options,inp1_,prefix='projection',activation_function=tf.nn.relu, nin=2400, nout=300)
+    inp2 = fflayer_3D(options,inp2_,prefix='projection',activation_function=tf.nn.relu, nin=2400, nout=300)
 
     if options['use_dropout']:
-        inp1 = tf.nn.dropout(inp1, keep_rate)
-        inp2 = tf.nn.dropout(inp2, keep_rate)
+        inp1 = tf.nn.dropout(inp1, keep_prob)
+        inp2 = tf.nn.dropout(inp2, keep_prob)
 
-
-    proj3 = bilstm_filter(inp1,n_samples,x1_mask, options,keep_rate, prefix='decoder',dim=300,is_training=is_training)
-    proj4 = bilstm_filter(inp2, n_samples,x2_mask, options, keep_rate, prefix='decoder', dim=300, is_training=is_training)
+    ctx3 = bilstm_filter(inp1,n_samples, options,keep_prob, prefix='decoder',dim=300,is_training=is_training)
+    ctx4 = bilstm_filter(inp2,n_samples, options,keep_prob, prefix='decoder',dim=300,is_training=is_training)
     ctx3 = tf.concat(proj3,2)
     ctx4 = tf.concat(proj4,2)
-
     logit1 = tf.reduce_sum(ctx3 * tf.expand_dims(x1_mask,2),0) / tf.expand_dims(tf.reduce_sum(x1_mask,0),1)
     logit2 = tf.reduce_max(ctx3 * tf.expand_dims(x1_mask,2),0)
     logit3 = tf.reduce_sum(ctx4 * tf.expand_dims(x2_mask,2),0) / tf.expand_dims(tf.reduce_sum(x2_mask,0),1)
     logit4 = tf.reduce_max(ctx4 *tf.expand_dims(x2_mask,2),0)
 
     logit = tf.concat([logit1,logit2,logit3,logit4],1)
-    logit = tf.nn.dropout(logit, keep_rate)
+    logit = tf.nn.dropout(logit, keep_prob)
 
-    logit = fflayer(options, logit,params, prefix='ff', activation_function=tf.nn.tanh, nin=2400, nout=300)
+    logit = fflayer_2D(options, logit, prefix='ff', activation_function=tf.nn.tanh, nin=2400, nout=300)
     if options['use_dropout']:
-        logit = tf.nn.dropout(logit, keep_rate)
-    pred = fflayer(options, logit,params, prefix='fout', activation_function = None, nin=300, nout=3)
+        logit = tf.nn.dropout(logit, keep_prob)
+    pred = fflayer_2D(options, logit, prefix='fout', activation_function = None, nin=300, nout=3)
 
 
     logger.info('Building f_cost...')
     # todo not same
-    # labels = tf.one_hot(y, depth=3, axis=1)
-    # pred = tf.nn.softmax(pred,1)
+    labels = tf.one_hot(y, depth=3, axis=1)
+    pred = tf.nn.softmax(pred,1)
     # cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=pred, labels=labels))
-    # cost =  -tf.reduce_sum(tf.cast(labels,tf.float32)*tf.log(pred))
-    cost = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=pred,labels=y)
+    cost =  -tf.reduce_mean(tf.cast(labels,tf.float32)*tf.log(pred))
+    #cost = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=pred,labels=y)
     logger.info('Done')
 
 
 
 
-    return  is_training,cost,x1, x1_mask, x2, x2_mask, y, n_timesteps_x1,n_timesteps_x2,pred
+    return  is_training,cost,keep_prob,x1, x1_mask, x2, x2_mask, y, n_timesteps_x1,n_timesteps_x2,pred
 
 def predict_pro_acc(sess,cost,prepare_data, model_options, iterator, maxlen,correct_pred,pred):
-    logger.info('start')
     # fo = open(_s(prefix,'pre.txt'), "w")
     num = 0
-    valid_acc = 0
-    total_cost = 0
-    loss = 0
-    result = 0
+    weight = 0
     for x1_sent, x2_sent, y_sent in iterator:
         num += len(x1_sent)
         data_x1, data_x1_mask, data_x2, data_x2_mask, data_y = prepare_data( x1_sent, x2_sent, y_sent, model_options, maxlen=maxlen)
 
-        loss ,result = sess.run([cost,correct_pred],
-                              feed_dict={  'x1:0':data_x1 , 'x1_mask:0':data_x1_mask , 'x2:0':data_x2 , 'x2_mask:0':data_x2_mask , 'y:0':data_y ,'keep_rate:0':1.0})
+        loss ,result,preds = sess.run([cost,correct_pred,pred],
+                              feed_dict={  'x1:0':data_x1 , 'x1_mask:0':data_x1_mask , 'x2:0':data_x2 , 'x2_mask:0':data_x2_mask , 'y:0':data_y })
 
-        valid_acc += result.sum()
-        total_cost += loss.sum()
+        # result_ = sess.run(tf.reduce_sum(tf.cast(result, tf.float32)))
+        result_ = sess.run(tf.reduce_sum(tf.cast(result, tf.float32)))
+        weight += result_
+    #     logger.debug('result {0} Cost {1} acc{2} result_sum {3} y{4}'.format(result, loss,1.0 * weight / num, result_,y_sent))
+    # logger.debug('result {0} preds {1} Cost {2} result_sum {3} y{4}'.format(result, preds, loss, result_,y_sent))
+    final_acc =1.0 * weight / num
 
+    # print result,preds,loss,result_
 
-    final_acc =1.0 * valid_acc / num
-    final_loss = 1.0 * total_cost  /num
-
-
-    return final_acc , final_loss
+    return final_acc , loss
 
 
 def train(
@@ -391,7 +420,7 @@ def train(
           max_epochs       = 5000,
           finish_after     = 10000000, # finish after this many updates
           decay_c          = 0.,  # L2 regularization penalty
-          clip_c           = -1.,  # gradient clipping threshold # TO AVOID GRADIENT EXPLOSION
+          clip_c           = -1.,  # gradient clipping threshold
           lrate            = 0.01,  # learning rate
           n_words          = 100000,  # vocabulary size
           n_words_lemma    = 100000,
@@ -463,12 +492,13 @@ def train(
     params = init_params(model_options, worddicts)
     embedding = word_embedding(model_options, params)
 
-    is_training,cost,x1, x1_mask, x2, x2_mask, y,n_timesteps_x1,n_timesteps_x2,pred \
-    = build_model(embedding, model_options,params)
+    is_training,cost,keep_prob,x1, x1_mask, x2, x2_mask, y,n_timesteps_x1,n_timesteps_x2,pred \
+    = build_model(embedding, model_options)
 
     # tvars = tf.trainable_variables()
 
-    #cost= tf.reduce_mean(cost)
+    # cost= tf.reduce_mean(cost)
+
 
     lr = tf.Variable(0.0, trainable=False)
 
@@ -482,22 +512,19 @@ def train(
     tvars = tf.trainable_variables()
     for var in tvars:
         print(var.name,var.shape)
-    #lossL2 = tf.add_n([tf.nn.l2_loss(v) for v in tvars if 'embeddings' not in v.name]) * 0.0001
-    #cost = cost + lossL2
     # regularization_cost = 0.0003 * tf.reduce_sum([tf.nn.l2_loss(v) for v in tvars])
     # cost = cost + regularization_cost
     grads,_=tf.clip_by_global_norm(tf.gradients(cost,tvars),model_options['clip_c'])
 
-
     train_op = optimizer.apply_gradients(zip(grads,tvars))
 
-    op_loss = tf.reduce_mean(cost)
 
 
     logger.info("corret_pred")
     correct_pred = tf.equal(tf.argmax(input=pred,axis=1),y)
     logger.info("Done")
 
+    temp_accuracy = tf.cast(correct_pred,tf.float32)
 
     logger.info("init variables")
     init = tf.global_variables_initializer()
@@ -542,7 +569,7 @@ def train(
                 n_samples += len(x1)
                 # n_samples_2 += len(x2)
                 uidx += 1
-                keep_prob = 0.5
+                keep_prob = 0.8
                 is_training = True
                 data_x1, data_x1_mask, data_x2, data_x2_mask, data_y = prepare_data(x1, x2, y, model_options,
                                                                           maxlen=maxlen)
@@ -552,11 +579,26 @@ def train(
                     uidx -= 1
                     continue
                 ud_start = time.time()
-                _,loss=sess.run([train_op,op_loss],feed_dict={ 'x1:0':data_x1 , 'x1_mask:0':data_x1_mask , 'x2:0':data_x2 , 'x2_mask:0':data_x2_mask , 'y:0':data_y ,'keep_rate:0':keep_prob })
+                sess.run(train_op,feed_dict={ 'x1:0':data_x1 , 'x1_mask:0':data_x1_mask , 'x2:0':data_x2 , 'x2_mask:0':data_x2_mask , 'y:0':data_y  })
                 # logger.debug('correct_pre{0} acc{1}'.format(pre,temp))
                 ud = time.time() - ud_start
                 if numpy.mod(uidx, dispFreq) == 0:
+                    # n_timesteps_x1:maxlength_x, n_timesteps_x2:maxlength_y,
+                    loss = sess.run(cost,feed_dict={  'x1:0':data_x1 , 'x1_mask:0':data_x1_mask , 'x2:0':data_x2 , 'x2_mask:0':data_x2_mask , 'y:0':data_y })
+                    # print n_samples  n_samples_2
                     logger.debug('Epoch {0} Update {1} Cost {2} UD {3}'.format(eidx, uidx, loss, ud))
+
+
+                # save the best model so far
+                if numpy.mod(uidx, saveFreq) == 0:
+                    logger.info("Saving...")
+                    best_num = best_num+1
+                    saver.save(sess, _s(_s(_s(save_model, "epoch"), str(best_num)), "model.ckpt"))
+                    logger.info( _s(_s(_s(save_model, "epoch"), str(best_num)), "model.ckpt"))
+                    numpy.savez(saveto, history_errs=history_errs, **params)
+                    pkl.dump(model_options, open('%s.pkl' % saveto, 'wb'))
+                    logger.info("Done")
+                    # print 'Done'
 
                 # validate model on validation set and early stop if necessary
                 if numpy.mod(uidx, validFreq) == 0:
@@ -585,19 +627,14 @@ def train(
 
                     valid_acc_record.append(valid_acc)
                     test_acc_record.append(test_acc)
-                    if uidx == 0 or (valid_err <= numpy.array(history_errs).min() and valid_acc > 0.86):
-                        best_num = best_num + 1
+                    if uidx == 0 or valid_err <= numpy.array(history_errs).min():
+                        best_num = best_num
                         best_epoch_num = eidx
                         wait_counter = 0
-                        logger.info("Saving...")
-                        saver.save(sess, _s(_s(_s(save_model, "epoch"), str(best_num)), "model.ckpt"))
-                        logger.info(_s(_s(_s(save_model, "epoch"), str(best_num)), "model.ckpt"))
-                        numpy.savez(saveto, history_errs=history_errs, **params)
-                        pkl.dump(model_options, open('%s.pkl' % saveto, 'wb'))
-                        logger.info("Done")
 
                     if valid_err > numpy.array(history_errs).min():
                         wait_counter += 1
+                        best_num = best_num - 1
 
                     if wait_counter >= wait_N:
                         logger.info("wait_counter max, need to half the lr")
@@ -635,7 +672,7 @@ def train(
 
     with tf.Session() as sess:
             # Restore variables from disk.
-        saver.restore(sess,_s(_s(_s(save_model,"epoch"),str(best_num)),"model.ckpt") )
+        saver.restore(sess,_s(_s(_s(save_model,"epoch"),str(1)),"model.ckpt") )
         keep_prob = 1
         is_training = False
         logger.info('=' * 80)
@@ -675,6 +712,7 @@ def train(
 
 if __name__ == '__main__':
     pass
+
 
 
 
