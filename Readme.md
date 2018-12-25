@@ -20,7 +20,7 @@ cd scripts/ESIM/
 bash train.sh
 ```
 
-The result are shown in `log.txt` and `log_result.txt` file.
+The results are shown in `log.txt` and `log_result.txt` file.
 
 ## Note
 
