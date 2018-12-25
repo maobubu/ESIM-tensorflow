@@ -1,4 +1,4 @@
-# Re-implementaion of Enhanced LSTM for Natural Language Inference with Tensorflow
+# Implementaion of Enhanced LSTM for Natural Language Inference with Tensorflow
 **"Enhanced LSTM for Natural Language Inference"**
 Qian Chen, Xiaodan Zhu, Zhenhua Ling, Si Wei, Hui Jiang, Diana Inkpen. _ACL (2017)_
 
