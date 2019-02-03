@@ -346,6 +346,7 @@ def build_model(embedding, options):
     ctx1 = ctx1 * x1_mask[:,:,None]
     ctx2 = ctx2 * x2_mask[:,:,None]
 
+    weight_y,weight_x = dot_production_attention(tf.transpose(ctx1,[1,0,2]),tf.transpose(ctx2,[1,0,2]),tf.transpose(x1_mask,[1,0]),tf.transpose(x2_mask,[1,0]))
     inp1_ = tf.concat([ctx1, weight_y, tf.multiply(ctx1,weight_y), tf.subtract(ctx1,weight_y)],2)
     inp2_ = tf.concat([ctx2, weight_x, tf.multiply(ctx2,weight_x), tf.subtract(ctx2,weight_x)],2)
 
@@ -358,8 +359,8 @@ def build_model(embedding, options):
 
     ctx3 = bilstm_filter(inp1,n_samples, options,keep_prob, prefix='decoder',dim=300,is_training=is_training)
     ctx4 = bilstm_filter(inp2,n_samples, options,keep_prob, prefix='decoder',dim=300,is_training=is_training)
-    ctx3 = tf.concat(proj3,2)
-    ctx4 = tf.concat(proj4,2)
+    ctx3 = tf.concat(ctx3,2)
+    ctx4 = tf.concat(ctx4,2)
     logit1 = tf.reduce_sum(ctx3 * tf.expand_dims(x1_mask,2),0) / tf.expand_dims(tf.reduce_sum(x1_mask,0),1)
     logit2 = tf.reduce_max(ctx3 * tf.expand_dims(x1_mask,2),0)
     logit3 = tf.reduce_sum(ctx4 * tf.expand_dims(x2_mask,2),0) / tf.expand_dims(tf.reduce_sum(x2_mask,0),1)
