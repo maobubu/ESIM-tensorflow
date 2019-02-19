@@ -53,7 +53,7 @@ class TextIterator:
         assert len(self.source_buffer) == len(self.target_buffer), 'Buffer size mismatch!'
         assert len(self.source_buffer) == len(self.label_buffer), 'Buffer size mismatch!'
 
-        if len(self.source_buffer) == 0:
+        if len(self.source_buffer) == 0:# Do this only if the source_buffer has nothing left
             for k_ in xrange(self.k):
                 ss = self.source.readline()
                 if ss == "":
@@ -125,14 +125,14 @@ class TextIterator:
                 if self.n_words > 0:
                     tt = [w if w < self.n_words else 1 for w in tt]
 
-                # read label 
+                # read label
                 ll = self.label_buffer.pop(0)
 
                 source.append(ss)
                 target.append(tt)
                 label.append(ll)
 
-                if len(source) >= self.batch_size or \
+                if len(source) >= self.batch_size or \ # jump out once we have a batch
                         len(target) >= self.batch_size or \
                         len(label) >= self.batch_size:
                     break
